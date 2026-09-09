@@ -27,3 +27,6 @@ dist-ssr
 .amplify
 amplify_outputs*
 amplifyconfiguration*
+
+# npm cache dir used by the amplify.yml build (npm ci --cache .npm)
+.npm
