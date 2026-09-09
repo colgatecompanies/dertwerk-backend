@@ -1,0 +1,65 @@
+# Typecheck the shared backend, and guard the two things that broke it.
+#
+# This repo owns the Cognito user pool every DertWerk app signs in against,
+# plus the data, storage and function resources. It had no CI at all, and on
+# 2026-03-05 its Amplify build broke and stayed broken until 2026-09-09 --
+# six months in which the shared identity backend could not be changed.
+#
+# Nothing here deploys. `ampx pipeline-deploy` runs only from amplify.yml on a
+# real Amplify build; this job just proves the code compiles and the buildspec
+# is still shaped the way Amplify requires.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      # 🚨 The step that matters most, and it is the FIRST one for a reason.
+      #
+      # `npm ci` fails when package.json and package-lock.json disagree, where
+      # `npm install` quietly reconciles them. The commit that stripped the
+      # frontend out of this repo edited package.json and left the lockfile
+      # describing the old React project -- so the lockfile still listed react,
+      # vite and eslint that package.json no longer had. This is the very first
+      # command amplify.yml runs, so it would have failed every build even
+      # after the buildspec was fixed. CI here catches that on the commit that
+      # causes it rather than months later.
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck the backend definition
+        run: npx tsc --noEmit -p amplify/tsconfig.json
+
+      - name: amplify.yml must still declare a frontend
+        # The literal cause of the six-month outage. This app is platform WEB,
+        # and Amplify Hosting rejects a buildspec with no frontend section:
+        #
+        #   !!! CustomerError: Missing frontend definition in buildspec
+        #
+        # It fails at CHECKOUT, before any command runs, so nothing in the job
+        # above would ever notice. The repo has no frontend and does not want
+        # one -- the block is a placeholder emitting an empty artifact dir --
+        # which is exactly why someone tidying up deleted it once already.
+        run: |
+          for key in "^version:" "^backend:" "^frontend:"; do
+            if ! grep -qE "$key" amplify.yml; then
+              echo "::error::amplify.yml is missing a '${key#^}' section."
+              echo "Amplify rejects this at checkout with CustomerError before running anything,"
+              echo "which is how this repo went six months without a successful deploy."
+              exit 1
+            fi
+          done
+          echo "amplify.yml declares version, backend and frontend."
